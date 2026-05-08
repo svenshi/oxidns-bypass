@@ -3,13 +3,13 @@
 仓库地址：https://github.com/yyysuo/mosdns
 
 
-# ForgeDNS Bypass
+# OxiDNS Bypass
 
-基于 **ForgeDNS + MikroTik RouterOS** 的域名策略分流方案。
+基于 **OxiDNS + MikroTik RouterOS** 的域名策略分流方案。
 
-本仓库用于演示如何使用 **ForgeDNS** 将特定域名的解析结果动态写入 RouterOS 的 `address-list`，再结合 RouterOS 的 `mangle + connection-mark + routing-mark + routing table` 实现基于域名的策略路由分流。
+本仓库用于演示如何使用 **OxiDNS** 将特定域名的解析结果动态写入 RouterOS 的 `address-list`，再结合 RouterOS 的 `mangle + connection-mark + routing-mark + routing table` 实现基于域名的策略路由分流。
 
-ForgeDNS 负责：**域名匹配、DNS 解析、提取 A/AAAA、同步到 RouterOS address-list**。RouterOS 负责：**连接打标、路由打标、按路由表选择出口**。
+OxiDNS 负责：**域名匹配、DNS 解析、提取 A/AAAA、同步到 RouterOS address-list**。RouterOS 负责：**连接打标、路由打标、按路由表选择出口**。
 
 这套方案适合家庭网络、旁路由、多出口、透明代理等场景，尤其适合希望“按域名决定出口，但又不想手工维护大量 IP”的使用方式。
 
@@ -18,7 +18,7 @@ ForgeDNS 负责：**域名匹配、DNS 解析、提取 A/AAAA、同步到 Router
 ## 特性
 
 - 基于域名的精细化策略路由
-- ForgeDNS 驱动 RouterOS `address-list` 动态维护
+- OxiDNS 驱动 RouterOS `address-list` 动态维护
 - 支持 IPv4 / IPv6 分离维护策略集合
 - 与透明代理网关配合实现分流
 - 保留 RouterOS 原生连接跟踪与策略路由能力
@@ -30,11 +30,11 @@ ForgeDNS 负责：**域名匹配、DNS 解析、提取 A/AAAA、同步到 Router
 
 ## 工作原理
 
-这套方案分成两个阶段：先由 ForgeDNS 在 DNS 阶段维护目标 IP 集合，再由 RouterOS 在转发阶段按目标 IP 执行策略路由。
+这套方案分成两个阶段：先由 OxiDNS 在 DNS 阶段维护目标 IP 集合，再由 RouterOS 在转发阶段按目标 IP 执行策略路由。
 
-1. 客户端先向 ForgeDNS 发起 DNS 查询
-2. ForgeDNS 将查询转发到上游 DNS，并获取响应中的 `A / AAAA` 结果
-3. ForgeDNS 判断当前域名是否命中预设策略集合
+1. 客户端先向 OxiDNS 发起 DNS 查询
+2. OxiDNS 将查询转发到上游 DNS，并获取响应中的 `A / AAAA` 结果
+3. OxiDNS 判断当前域名是否命中预设策略集合
 4. 若未命中，仅将解析结果正常返回给客户端，不写入 RouterOS
 5. 若命中，则把解析出的目标 IP 动态写入 RouterOS 的 `address-list`
 6. 客户端拿到解析结果后，继续向目标 IP 发起实际连接
@@ -49,7 +49,7 @@ ForgeDNS 负责：**域名匹配、DNS 解析、提取 A/AAAA、同步到 Router
 
 ```mermaid
 flowchart TD
-    A[客户端发起 DNS 查询] --> B[ForgeDNS 接收查询]
+    A[客户端发起 DNS 查询] --> B[OxiDNS 接收查询]
     B --> C[转发到上游解析]
     C --> D[获取 A / AAAA 结果]
     D --> E{是否命中策略集合}
@@ -85,9 +85,9 @@ flowchart TD
 
 ## 网络拓扑
 
-下面的拓扑根据仓库原有网络拓扑图重绘，保留了原有网段和主机位置，并替换为当前的 ForgeDNS 分流方案。
+下面的拓扑根据仓库原有网络拓扑图重绘，保留了原有网段和主机位置，并替换为当前的 OxiDNS 分流方案。
 
-![forgedns_bypass_topology](img/forgedns_bypass_topology.jpg)
+![oxidns_bypass_topology](img/forgedns_bypass_topology.jpg)
 
 ---
 
@@ -95,9 +95,9 @@ flowchart TD
 
 在开始前，请确认：
 
-1. 已经部署可正常运行的 **ForgeDNS** 
-2. 客户端 DNS 已经指向 ForgeDNS
-3. RouterOS 已开启 API，并允许 ForgeDNS 所在主机访问
+1. 已经部署可正常运行的 **OxiDNS** 
+2. 客户端 DNS 已经指向 OxiDNS
+3. RouterOS 已开启 API，并允许 OxiDNS 所在主机访问
 4. 已准备好透明代理出口，例如 ShellCrash，并开启透明代理网关
 5. 已规划好一个专用于策略流量的路由表，例如 `policy_table`
 
@@ -152,11 +152,11 @@ IP -> Routes
 
 ## 3. 规划 RouterOS address-list 名称
 
-ForgeDNS 会把解析结果写入 RouterOS 的地址集合中。本文只以 IPv4 演示：
+OxiDNS 会把解析结果写入 RouterOS 的地址集合中。本文只以 IPv4 演示：
 
 - `policy_set_v4`
 
-通常不需要手工创建，但后续 ForgeDNS 和 mangle 规则都要使用相同名称。
+通常不需要手工创建，但后续 OxiDNS 和 mangle 规则都要使用相同名称。
 
 进入：
 
@@ -236,7 +236,7 @@ IPv6 时可按同样思路单独做一套。
 
 ## 6. 配置 DNS 转发
 
-将所有发往 RouterOS 的 DNS 请求转发到 ForgeDNS。
+将所有发往 RouterOS 的 DNS 请求转发到 OxiDNS。
 
 进入：
 
@@ -298,18 +298,18 @@ Tools -> Netwatch
 ```
 ---
 
-# 二、ForgeDNS 配置
+# 二、OxiDNS 配置
 
-参考仓库配置示例：[forgedns/config.yaml](forgedns/config.yaml)
+参考仓库配置示例：[oxidns/config.yaml](oxidns/config.yaml)
 
-ForgeDNS 文档：https://forgedns.cn
+OxiDNS 文档：https://oxidns.cn
 
-ForgeDNS 仓库：https://github.com/SvenShi/forgedns
+OxiDNS 仓库：https://github.com/SvenShi/oxidns
 
 ---
 # 三、验证方法
 
-## 1. 验证 DNS 是否经过 ForgeDNS
+## 1. 验证 DNS 是否经过 OxiDNS
 
 在客户端执行：
 
@@ -340,7 +340,7 @@ IP -> Firewall -> Address Lists
 - `policy_set_v4`
 - `policy_set_v6`
 
-中是否出现 ForgeDNS 同步的解析结果。
+中是否出现 OxiDNS 同步的解析结果。
 
 ![address-list 动态写入结果](img/address-list-write.png)
 
@@ -381,9 +381,9 @@ IP -> Firewall -> Mangle
 
 优先检查：
 
-- 客户端是否真的在使用 ForgeDNS
+- 客户端是否真的在使用 OxiDNS
 - 域名是否命中了 `domain_set`
-- ForgeDNS 到 RouterOS API 是否可达
+- OxiDNS 到 RouterOS API 是否可达
 - `address_list4/address_list6` 命名是否一致
 - `sequence` 执行顺序是否正确
 
@@ -416,9 +416,9 @@ IP -> Firewall -> Mangle
 
 # 参考资料
 
-- ForgeDNS 文档: https://forgedns.cn/
-- ForgeDNS 仓库: https://github.com/SvenShi/forgedns
-- ForgeDNS MikroTik 策略路由: https://forgedns.cn/mikrotik-policy-routing/
+- OxiDNS 文档: https://forgedns.cn/
+- OxiDNS 仓库: https://github.com/SvenShi/oxidns
+- OxiDNS MikroTik 策略路由: https://forgedns.cn/mikrotik-policy-routing/
 
 ---
 
