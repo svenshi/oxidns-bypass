@@ -1,0 +1,199 @@
+# OxiDNS Bypass - RouterOS address-list 方案
+#
+# 官方原生安装器部署时复制为 /opt/oxidns/config.yaml：
+#   cp config.ros_address_list.yaml /opt/oxidns/config.yaml
+#
+# 修改前至少确认：OxiDNS/API 监听地址、RouterOS 地址与账号、代理网关和上游 DNS。
+
+log:
+  level: info
+
+api:
+  http:
+    listen: "172.16.2.53:9199"
+
+plugins:
+  # 缺少规则时在其它插件初始化前下载；运行后每天 04:17 自动刷新。
+  # GitHub 访问不需要代理时，删除 socks5 配置即可。
+  - tag: rules_download
+    type: download
+    args:
+      timeout: 120s
+      startup_if_missing: true
+      socks5: "172.16.2.40:7890"
+      downloads:
+        - url: "https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geosite.dat"
+          dir: "./rules"
+          filename: "geosite.dat"
+
+  - tag: geosite_direct
+    type: geosite
+    args:
+      file: "./rules/geosite.dat"
+      selectors:
+        - "cn"
+        - "apple-cn"
+        - "apple"
+        - "category-games@cn"
+
+  - tag: geosite_policy
+    type: geosite
+    args:
+      file: "./rules/geosite.dat"
+      selectors:
+        - "geolocation-!cn"
+
+  # 仓库自定义规则直接写在配置中；无需额外复制 rule 目录。
+  - tag: direct_domains
+    type: domain_set
+    args:
+      exps:
+        - "domain:steamserver.net"
+        - "domain:controlplane.tailscale.com"
+        - "domain:log.tailscale.io"
+        - "domain:speedtest.im"
+        - "domain:solidigm-nvme.com"
+        - "domain:mountblade.com.cn"
+        - "domain:apple.com"
+        - "domain:apple.cn"
+        - "domain:windowsupdate.com"
+        - "domain:windows.com"
+        - "domain:fdnssc.com"
+      sets:
+        - "geosite_direct"
+
+  # 需要策略出口的域名。
+  - tag: policy_domains
+    type: domain_set
+    args:
+      exps:
+        - "domain:mikrotik.com"
+        - "domain:cloudflare.com"
+      sets:
+        - "geosite_policy"
+
+  - tag: reload_rule_providers
+    type: reload_provider
+    args:
+      - "$geosite_direct"
+      - "$geosite_policy"
+
+  - tag: rules_refresh
+    type: sequence
+    args:
+      - exec: "$rules_download"
+      - exec: "$reload_rule_providers"
+
+  - tag: rules_cron
+    type: cron
+    args:
+      timezone: "Asia/Shanghai"
+      jobs:
+        - name: refresh_geosite
+          schedule: "17 4 * * *"
+          executors:
+            - "$rules_refresh"
+
+  - tag: cache
+    type: cache
+    args:
+      size: 5120
+      dump_file: "./cache.dump"
+      short_circuit: true
+
+  # 国内/直连上游。请替换运营商 DNS，或按实际网络调整。
+  - tag: forward_direct
+    type: forward
+    args:
+      concurrent: 3
+      upstreams:
+        - addr: "udp://61.139.2.69:53"
+        - addr: "udp://218.6.200.139:53"
+        - addr: "udp://223.5.5.5:53"
+
+  # 策略上游通过旁路由的 SOCKS5 出口访问。
+  - tag: forward_policy
+    type: forward
+    args:
+      concurrent: 2
+      upstreams:
+        - addr: "https://1.1.1.1/dns-query"
+          socks5: "172.16.2.40:7890"
+        - addr: "https://8.8.8.8/dns-query"
+          socks5: "172.16.2.40:7890"
+
+  # 策略上游失败或超过 500 ms 时，使用直连上游兜底。
+  - tag: policy_fallback
+    type: fallback
+    args:
+      primary: forward_policy
+      secondary: forward_direct
+      threshold: 500
+      always_standby: false
+
+  # 观察策略域名的最终 A/AAAA 应答，并把 IPv4 写入 RouterOS address-list。
+  # password 支持 OxiDNS 的环境变量展开；未设置时使用明显不可用的占位值。
+  - tag: policy_address_list
+    type: ros_address_list
+    args:
+      address: "172.16.1.1:8728"
+      username: "oxidns"
+      password: "${ROUTEROS_PASSWORD:-change-me}"
+      connect_timeout: 5
+      send_timeout: 5
+      receive_timeout: 5
+      async: true
+      wait_timeout: 8s
+      queue_capacity: 16384
+      address_list4: "policy_set_v4"
+      # 如需 IPv6，请同时配置 RouterOS IPv6 mangle、路由表和网关后再启用：
+      # address_list6: "policy_set_v6"
+      comment_prefix: "oxi"
+      min_ttl: 60
+      max_ttl: 3600
+      # 保留条目跨越正常重启/reload；动态项仍由 RouterOS timeout 到期。
+      cleanup_on_shutdown: false
+
+  - tag: direct_sequence
+    type: sequence
+    args:
+      - exec: "$cache"
+      - matches: "!has_resp"
+        exec: "$forward_direct"
+      - matches: "has_resp"
+        exec: accept
+      - exec: "reject SERVFAIL"
+
+  - tag: policy_sequence
+    type: sequence
+    args:
+      # continuation executor 必须位于产生最终应答的插件之前。
+      - exec: "$policy_address_list"
+      - exec: "$cache"
+      - matches: "!has_resp"
+        exec: "$policy_fallback"
+      - matches: "has_resp"
+        exec: accept
+      - exec: "reject SERVFAIL"
+
+  - tag: main_sequence
+    type: sequence
+    args:
+      - matches: "qname $direct_domains"
+        exec: "goto direct_sequence"
+      - matches: "qname $policy_domains"
+        exec: "goto policy_sequence"
+      # 未分类域名默认按策略域名处理，避免新域名意外绕过策略出口。
+      - exec: "goto policy_sequence"
+
+  - tag: udp_server
+    type: udp_server
+    args:
+      entry: main_sequence
+      listen: "0.0.0.0:5335"
+
+  - tag: tcp_server
+    type: tcp_server
+    args:
+      entry: main_sequence
+      listen: "0.0.0.0:5335"

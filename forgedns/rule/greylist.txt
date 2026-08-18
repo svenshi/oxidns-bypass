@@ -1,3 +1,0 @@
-# ForgeDNS Rules
-domain:mikrotik.com
-domain:cloudflare.com
